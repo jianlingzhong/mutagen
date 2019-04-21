@@ -13,6 +13,7 @@ matrix:
     - os: linux
       env:
         - GO111MODULE=on
+        - CGO_ENABLED=0
         - MUTAGEN_TEST_END_TO_END=full
         - MUTAGEN_TEST_SSH=true
         - MUTAGEN_TEST_DOCKER=true
