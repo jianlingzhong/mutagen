@@ -1,5 +1,8 @@
 // +build darwin,cgo linux,cgo
 
+// Enable required POSIX features.
+#define _POSIX_C_SOURCE 200809L
+
 #include "directory_posix_cgo.h"
 
 // Standard includes
