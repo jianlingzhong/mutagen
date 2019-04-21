@@ -39,16 +39,31 @@ func ensureValidName(name string) error {
 // the directory's contents. All of its operations avoid the traversal of
 // symbolic links.
 type Directory struct {
-	// file is the underlying os.File object corresponding to the directory.
-	file *os.File
-	// descriptor is the cached file descriptor extracted from the os.File
-	// object.
+	// descriptor is the file descriptor for the directory. On platforms with
+	// cgo support, this descriptor is the main handle for the directory and it
+	// should be closed directly. On platforms without cgo support, the
+	// responsibility for closing this descriptor falls to the os.File object
+	// which wraps it (see below), and thus the descriptor should not be closed
+	// directly.
 	descriptor int
+	// file is an os.File object which wraps the directory descriptor. It is
+	// only non-nil on platforms without cgo support, where its Readdirnames
+	// function is required. On platforms without cgo support, this object is
+	// the main handle for the file and should be closed directory (in which
+	// case it will handle closing the underlying descriptor).
+	file *os.File
 }
 
 // Close closes the directory.
 func (d *Directory) Close() error {
-	return d.file.Close()
+	// Handle closure based on whether or not we have cgo support. See the
+	// documentation for the descriptor and file members of Directory to
+	// understand why we handle this differently.
+	if haveFastDirectoryContents {
+		return unix.Close(d.descriptor)
+	} else {
+		return d.file.Close()
+	}
 }
 
 // CreateDirectory creates a new directory with the specified name inside the
@@ -166,10 +181,10 @@ func (d *Directory) SetPermissions(name string, ownership *OwnershipSpecificatio
 
 // open is the underlying open implementation shared by OpenDirectory and
 // OpenFile.
-func (d *Directory) open(name string, wantDirectory bool) (*os.File, int, error) {
+func (d *Directory) open(name string, wantDirectory bool) (int, error) {
 	// Verify that the name is valid.
 	if err := ensureValidName(name); err != nil {
-		return nil, 0, err
+		return -1, err
 	}
 
 	// Open the file for reading while avoiding symbolic link traversal. There
@@ -194,7 +209,7 @@ func (d *Directory) open(name string, wantDirectory bool) (*os.File, int, error)
 		} else if runtime.GOOS == "darwin" && err == unix.EINTR {
 			continue
 		} else {
-			return nil, 0, err
+			return -1, err
 		}
 	}
 
@@ -213,40 +228,47 @@ func (d *Directory) open(name string, wantDirectory bool) (*os.File, int, error)
 	var metadata unix.Stat_t
 	if err := unix.Fstat(descriptor, &metadata); err != nil {
 		unix.Close(descriptor)
-		return nil, 0, errors.Wrap(err, "unable to query file metadata")
+		return -1, errors.Wrap(err, "unable to query file metadata")
 	} else if Mode(metadata.Mode)&ModeTypeMask != expectedType {
 		unix.Close(descriptor)
-		return nil, 0, errors.New("path is not of the expected type")
+		return -1, errors.New("path is not of the expected type")
 	}
 
-	// Wrap the descriptor up in a file object. We use the base name for the
-	// file since that's the name that was used to "open" the file, which is
-	// what os.File.Name is supposed to return (even though we don't expose
-	// os.File.Name).
-	file := os.NewFile(uintptr(descriptor), name)
-
 	// Success.
-	return file, descriptor, nil
+	return descriptor, nil
 }
 
 // OpenDirectory opens the directory within the directory specified by name.
 func (d *Directory) OpenDirectory(name string) (*Directory, error) {
 	// Call the underlying open method.
-	file, descriptor, err := d.open(name, true)
+	descriptor, err := d.open(name, true)
 	if err != nil {
 		return nil, err
 	}
 
+	// If we don't have cgo-based directory listing, then we need to wrap the
+	// descriptor in an os.File object so that we can use its Readdirnames
+	// method to scan directory contents.
+	var file *os.File
+	if !haveFastDirectoryContents {
+		file = os.NewFile(uintptr(descriptor), name)
+	}
+
 	// Success.
 	return &Directory{
-		file:       file,
 		descriptor: descriptor,
+		file:       file,
 	}, nil
 }
 
 // ReadContentNames queries the directory contents and returns their base names.
 // It does not return "." or ".." entries.
 func (d *Directory) ReadContentNames() ([]string, error) {
+	// See if we have a fast implementation.
+	if haveFastDirectoryContents {
+		return readDirectoryContentNamesFast(d.descriptor)
+	}
+
 	// Read content names. Fortunately we can use the os.File implementation for
 	// this since it operates on the underlying file descriptor directly.
 	names, err := d.file.Readdirnames(0)
@@ -318,6 +340,11 @@ func (d *Directory) ReadContentMetadata(name string) (*Metadata, error) {
 // infrastructure). This function doesn't not return metadata for "." or ".."
 // entries.
 func (d *Directory) ReadContents() ([]*Metadata, error) {
+	// See if we have a fast implementation.
+	if haveFastDirectoryContents {
+		return readDirectoryContentsFast(d.descriptor)
+	}
+
 	// Read content names.
 	names, err := d.ReadContentNames()
 	if err != nil {
@@ -350,8 +377,14 @@ func (d *Directory) ReadContents() ([]*Metadata, error) {
 
 // OpenFile opens the file within the directory specified by name.
 func (d *Directory) OpenFile(name string) (ReadableFile, error) {
-	file, _, err := d.open(name, false)
-	return file, err
+	// Call the underlying open method.
+	descriptor, err := d.open(name, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap the file descriptor in an os.File object.
+	return os.NewFile(uintptr(descriptor), name), nil
 }
 
 // readlinkInitialBufferSize specifies the initial buffer size to use for
