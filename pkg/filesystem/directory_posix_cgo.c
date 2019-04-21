@@ -1,4 +1,4 @@
-// +build !windows,cgo
+// +build darwin,cgo linux,cgo
 
 #include "directory_posix_cgo.h"
 

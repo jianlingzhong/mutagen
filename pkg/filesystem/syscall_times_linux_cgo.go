@@ -1,4 +1,4 @@
-// +build darwin,cgo
+// +build linux,cgo
 
 package filesystem
 
@@ -12,5 +12,5 @@ import "C"
 // components) from a C.struct_stat structure. It's necessary since not all
 // POSIX platforms use the same struct field name for this value.
 func extractCModificationTime(metadata *C.struct_stat) (int64, int64) {
-	return int64(metadata.st_mtimespec.tv_sec), int64(metadata.st_mtimespec.tv_nsec)
+	return int64(metadata.st_mtim.tv_sec), int64(metadata.st_mtim.tv_nsec)
 }

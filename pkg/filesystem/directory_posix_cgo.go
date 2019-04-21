@@ -1,4 +1,4 @@
-// +build !windows,cgo
+// +build darwin,cgo linux,cgo
 
 package filesystem
 
@@ -8,6 +8,7 @@ import (
 )
 
 /*
+#cgo CFLAGS: -std=c99
 #include "directory_posix_cgo.h"
 */
 import "C"

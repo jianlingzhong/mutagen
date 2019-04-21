@@ -1,4 +1,4 @@
-// +build !windows,!cgo
+// +build darwin,!cgo linux,!cgo !darwin,!linux
 
 package filesystem
 
